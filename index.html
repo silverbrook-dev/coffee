@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>커피 브루잉 로그 (Cloud Sync & Recovery)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+/* 디자인 및 레이아웃 최적화 */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;background:#f8f6f2;color:#1a1a1a;min-height:100vh}
+.wrap{max-width:780px;margin:0 auto;padding:2rem 1.5rem}
+.header-flex{display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem}
+h1{font-size:18px;font-weight:600;letter-spacing:-.01em}
+
+/* 동기화 섹션 스타일 */
+.sync-sec{background:#fff;padding:12px;border-radius:8px;border:1px solid #e0dbd4;margin-bottom:1.5rem}
+.sync-sec label{font-size:10px;color:#aaa;display:block;margin-bottom:6px;text-transform:uppercase}
+
+/* 탭 포커스 강조 스타일 (요청 반영) */
+.tabs{display:flex;border-bottom:1px solid #e0dbd4;margin-bottom:1.5rem}
+.tab{padding:8px 16px;font-size:13px;cursor:pointer;color:#888;border:none;background:none;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.2s}
+.tab.on{color:#000 !important;border-bottom-color:#000 !important;font-weight:700 !important}
+
+/* 반응형 그리드 */
+.brew-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-bottom:12px}
+.date-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:12px;align-items:end}
+.mg{display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:1.5rem}
+
+.slabel{font-size:10px;color:#aaa;margin-bottom:8px;font-weight:500;text-transform:uppercase}
+.sec{margin-bottom:1.25rem}
+.fg{display:flex;flex-direction:column;gap:4px}
+.fg label{font-size:11px;color:#888}
+input,select,textarea{width:100%;border:1px solid #e0dbd4;border-radius:6px;padding:8px 10px;font-size:13px;background:#fff;outline:none;font-family:inherit}
+textarea{resize:none;height:80px;line-height:1.5}
+
+/* 투입 단계 및 차트 */
+.pt{width:100%;border-collapse:collapse}
+.pt th{font-size:10px;color:#aaa;padding:6px;border-bottom:1px solid #e0dbd4}
+.pt td{padding:5px 4px;border-bottom:1px solid #f0ece8}
+.pt td:first-child{font-size:12px;color:#888;width:50px}
+.pt input{border:none;background:transparent;text-align:center}
+.inc{font-size:10px;color:#bbb;display:block;text-align:center}
+.sr{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sr label{font-size:12px;color:#888;width:52px;flex-shrink:0}
+.sr input[type=range]{flex:1;accent-color:#6b8cba}
+.sr span{font-size:12px;font-weight:600;min-width:15px;text-align:right}
+
+.divider{height:1px;background:#e0dbd4;margin:1.5rem 0}
+.btn-group{display:flex;gap:8px}
+.sbtn{flex:2;padding:12px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;background:#3a3028;color:#fff;border:none}
+.rbtn{flex:1;padding:12px;font-size:13px;border-radius:8px;cursor:pointer;background:#fff;color:#888;border:1px solid #e0dbd4}
+
+/* 보관함 카드 디자인 */
+.hc{padding:14px;border-radius:10px;border:1px solid #e0dbd4;background:#fff;margin-bottom:10px;cursor:pointer;transition:transform 0.1s}
+.hc:hover{border-color:#b0a898;transform:translateY(-1px)}
+.hc-top{display:flex;justify-content:space-between;margin-bottom:5px}
+.hc-name{font-weight:600;color:#000}
+.hc-recdate{font-size:11px;color:#aaa}
+.hc-meta{font-size:11px;color:#888;margin-bottom:8px}
+.badge{font-size:10px;color:#666;background:#f0ece8;padding:2px 8px;border-radius:20px;margin-right:4px}
+.hc-note{font-size:12px;color:#555;margin-top:6px;line-height:1.4}
+
+.loading-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.8);display:none;justify-content:center;align-items:center;z-index:1000}
+#ddays{font-size:11px;color:#a0956c;padding-bottom:10px}
+
+/* 자동 계산 결과 줄 */
+.calc{font-size:11px;color:#a0956c;margin-top:10px;line-height:1.5}
+/* 소형 토글/조작 버튼 */
+.mb{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid #e0dbd4;background:#fff;color:#888;cursor:pointer;font-family:inherit}
+.mb.on{background:#3a3028;color:#fff;border-color:#3a3028}
+.mb:focus-visible{outline:2px solid #6b8cba;outline-offset:1px}
+/* 방식에 따라 열리는 블록 */
+.cond{border-left:2px solid #e0dbd4;padding-left:12px}
+.slabel-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.slabel-row .slabel{margin-bottom:0}
+</style>
+</head>
+<body>
+<div id="loading" class="loading-overlay">데이터 동기화 중...</div>
+<div class="wrap">
+  <div class="header-flex">
+    <h1>커피 브루잉 로그</h1>
+    <div id="editing-indicator" style="font-size:11px; color:#6b8cba; font-weight:600; display:none;">● 편집 모드</div>
+  </div>
+
+  <div class="sync-sec">
+    <label>Cloud Sync URL</label>
+    <div style="display:flex; gap:8px;">
+      <input type="text" id="api-url" placeholder="Apps Script URL" oninput="saveUrl()">
+      <button class="rbtn" style="flex:0 0 70px; padding:0" onclick="syncNow()">동기화</button>
+    </div>
+    <div class="calc" id="syncmsg"></div>
+    <div style="display:flex;gap:6px;margin-top:10px;align-items:center">
+      <button class="mb" onclick="exportData()">백업 내보내기</button>
+      <button class="mb" onclick="document.getElementById('impfile').click()">백업 불러오기</button>
+      <input type="file" id="impfile" accept=".json,application/json" style="display:none" onchange="importData(this)">
+      <span id="impmsg" style="font-size:11px;color:#a0956c"></span>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" id="t-new" onclick="go('new')">새 기록 / 편집</button>
+    <button class="tab" id="t-hist" onclick="go('hist')">보관함<span id="cnt" style="font-size:11px;color:#bbb;margin-left:4px"></span></button>
+  </div>
+
+  <div id="p-new">
+    <input type="hidden" id="f-id">
+    <div class="sec">
+      <div class="slabel">브루잉 정보</div>
+      <div class="brew-grid">
+        <div class="fg"><label>원두명</label><input type="text" id="fb" placeholder="예: 케냐 AA"></div>
+        <div class="fg"><label>투입량 (g)</label><input type="number" id="fd" oninput="calcBypass()"></div>
+        <div class="fg"><label>분쇄도 (클릭)</label><input type="number" id="fgr"></div>
+        <div class="fg"><label>드리퍼</label>
+          <select id="fdr">
+            <option value="">선택</option>
+            <option>하리오 V60 01</option>
+            <option>Hario V60 02</option>
+            <option>하리오 스위치 200</option>
+            <option>칼리타 웨이브 155</option>
+            <option>칼리타 101</option>
+            <option>칼리타 102</option>
+            <option>칼리타 웨이브 (스테인리스)</option>
+          </select>
+        </div>
+        <div class="fg"><label>수온 (°C)</label><input type="number" id="ft"></div>
+        <div class="fg"><label>추출 방식</label>
+          <select id="fmethod" onchange="onMethodChange()">
+            <option value="">선택</option>
+            <option>푸어오버</option>
+            <option>침지</option>
+            <option>하이브리드 (스위치)</option>
+            <option>에센스 + 가수</option>
+            <option>플래시 브루</option>
+          </select>
+        </div>
+        <div class="fg"><label>분쇄 시 원두 상태</label>
+          <select id="fbeanstate">
+            <option value="">선택</option>
+            <option>냉동두 즉시</option>
+            <option>해동 후</option>
+            <option>상온 보관</option>
+          </select>
+        </div>
+        <div class="fg"><label>세션 태그</label><input type="text" id="ftag" placeholder="예: 가수비교 A"></div>
+      </div>
+      <div class="date-grid">
+        <div class="fg"><label>로스팅일</label><input type="date" id="froast" oninput="calcDays()"></div>
+        <div class="fg"><label>소분 냉동일</label><input type="date" id="ffreeze" oninput="calcDays()"></div>
+        <div class="fg"><label>기록일</label><input type="date" id="frec" oninput="calcDays()"></div>
+        <div id="ddays"></div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="sec">
+      <div class="slabel">물</div>
+      <div class="brew-grid">
+        <div class="fg"><label>추출수</label><input type="text" id="fwater" placeholder="예: 아이시스 2.0"></div>
+        <div class="fg"><label>가수수</label><input type="text" id="fbpwater" placeholder="가수하는 경우만"></div>
+      </div>
+    </div>
+
+    <div class="sec cond" id="bypass-sec" style="display:none">
+      <div class="slabel">가수 (바이패스)</div>
+      <div class="brew-grid">
+        <div class="fg"><label>추출량 · 에센스 (g)</label><input type="number" id="fext" oninput="calcBypass()"></div>
+        <div class="fg"><label>가수량 (g)</label><input type="number" id="fbp" oninput="calcBypass()"></div>
+        <div class="fg"><label>가수 온도 (°C)</label><input type="number" id="fbptemp"></div>
+      </div>
+      <div class="calc" id="bpcalc"></div>
+    </div>
+
+    <div class="sec">
+      <div class="slabel">홀딩 · 음용</div>
+      <div class="brew-grid">
+        <div class="fg"><label>홀딩 포맷</label>
+          <select id="fhold">
+            <option value="">선택</option>
+            <option>즉시 음용</option>
+            <option>핫 (보온)</option>
+            <option>냉 (얼음)</option>
+            <option>냉장</option>
+            <option>상온</option>
+          </select>
+        </div>
+        <div class="fg"><label>추출 시각</label><input type="time" id="fbrewtime" oninput="calcHold()"></div>
+        <div class="fg"><label>음용 시각</label><input type="time" id="fdrinktime" oninput="calcHold()"></div>
+        <div class="fg"><label>음용 온도 (°C)</label><input type="number" id="fdrinktemp"></div>
+      </div>
+      <div class="calc" id="holdcalc"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="mg">
+      <div class="sec">
+        <div class="slabel-row">
+          <div class="slabel">투입 단계</div>
+          <div style="display:flex;gap:6px">
+            <button class="mb" onclick="addStage()" title="단계 추가">＋</button>
+            <button class="mb" onclick="delStage()" title="단계 삭제">－</button>
+          </div>
+        </div>
+        <table class="pt">
+          <thead><tr><th>단계</th><th>누적 시간(초)</th><th id="whead">누적 물량(g)</th></tr></thead>
+          <tbody id="pb"></tbody>
+        </table>
+      </div>
+      <div class="sec">
+        <div class="slabel-row">
+          <div class="slabel">테이스팅 평가</div>
+          <div style="display:flex;gap:6px">
+            <button class="mb on" id="m-act" onclick="setMode('act')">실측</button>
+            <button class="mb" id="m-pred" onclick="setMode('pred')">예측</button>
+          </div>
+        </div>
+        <div style="width:100%; height:200px; margin-bottom:15px"><canvas id="rc"></canvas></div>
+        <div id="sls"></div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="sec">
+      <div class="slabel">메모</div>
+      <div class="ng">
+        <div class="fg"><label>결과</label><textarea id="fr" placeholder="맛, 향 특징…"></textarea></div>
+        <div class="fg"><label>다음 조정</label><textarea id="fn" placeholder="예: 분쇄도 ↑2클릭…"></textarea></div>
+      </div>
+    </div>
+
+    <div class="btn-group">
+      <button class="rbtn" onclick="resetForm()">새로 쓰기</button>
+      <button class="sbtn" onclick="save()">저장 및 클라우드 동기화</button>
+    </div>
+  </div>
+
+  <div id="p-hist" style="display:none">
+    <input type="text" id="hsearch" placeholder="원두명 · 세션 태그 · 방식 · 메모 검색" oninput="renderHist()" style="margin-bottom:12px">
+    <div id="hl"></div>
+  </div>
+</div>
+
+<script>
+const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbxeXhVfM9dHFIZC-CYRhDUwK8270adq2aB2x21cIxYv3tyUpWsCxL4So8paGfhF8FP1/exec";
+const dims = [{k:'aroma',l:'향'},{k:'acidity',l:'산미'},{k:'sweetness',l:'단맛'},{k:'bitterness',l:'쓴맛'},{k:'body',l:'바디감'},{k:'finish',l:'후미'}];
+
+// 텍스트 필드 일괄 처리용 목록 (신규 필드 포함)
+const TEXTF = ['fb','fd','fgr','fdr','ft','fmethod','fbeanstate','ftag',
+               'froast','ffreeze','fwater','fbpwater','fext','fbp','fbptemp',
+               'fhold','fbrewtime','fdrinktime','fdrinktemp','fr','fn'];
+
+let sc = Object.fromEntries(dims.map(d => [d.k, 3]));   // 실측
+let pd = Object.fromEntries(dims.map(d => [d.k, 3]));   // 예측
+let hasPred = false;
+let mode = 'act';
+let nStage = 4;
+let chart;
+
+const V = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+const setV = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+
+// [복구 로직] bl_ids 목록에서 빠진 로컬 기록 강제 검색
+function recoverOrphanedData() {
+  let ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  let found = false;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key.startsWith('bl_') && key !== 'bl_ids') {
+      const id = key.replace('bl_', '');
+      if (!ids.includes(id)) { ids.push(id); found = true; }
+    }
+  }
+  if (found) {
+    ids.sort((a,b) => b - a); // 최신순 정렬
+    localStorage.setItem('bl_ids', JSON.stringify(ids));
+  }
+}
+
+function init() {
+  recoverOrphanedData();
+  document.getElementById('api-url').value = localStorage.getItem('coffee_api_url') || DEFAULT_URL;
+  document.getElementById('frec').value = new Date().toISOString().slice(0, 10);
+
+  renderStages(false);
+
+  const slContainer = document.getElementById('sls'); slContainer.innerHTML = '';
+  dims.forEach(d => {
+    slContainer.innerHTML += `<div class="sr"><label>${d.l}</label><input type="range" id="sl-${d.k}" min="1" max="5" value="3" oninput="setScore('${d.k}', +this.value)"><span id="sv-${d.k}">3</span></div>`;
+  });
+
+  initChart();
+  updateHistoryCount();
+  if (document.getElementById('api-url').value) syncNow(true);
+}
+
+/* ---------- 투입 단계 (가변 행) ---------- */
+function stageName(i) { return i === 0 ? '뜸' : `${i}차`; }
+
+function renderStages(preserve = true) {
+  const tb = document.getElementById('pb');
+  const old = [];
+  if (preserve) {
+    for (let i = 0; i < 20; i++) {
+      const a = document.getElementById(`pt-${i}`);
+      if (!a) break;
+      old.push({ t: a.value, w: document.getElementById(`pw-${i}`).value });
+    }
+  }
+  tb.innerHTML = '';
+  for (let i = 0; i < nStage; i++) {
+    const v = old[i] || { t: '', w: '' };
+    tb.innerHTML += `<tr><td>${stageName(i)}</td><td><input type="number" id="pt-${i}" placeholder="—" value="${v.t}"></td><td><input type="number" id="pw-${i}" placeholder="—" value="${v.w}" oninput="updateInc()"><span class="inc" id="pinc-${i}"></span></td></tr>`;
+  }
+  updateInc();
+}
+
+function addStage() { if (nStage < 12) { nStage++; renderStages(); } }
+function delStage() { if (nStage > 1) { nStage--; renderStages(); } }
+
+function updateInc() {
+  let prev = 0;
+  for (let i = 0; i < nStage; i++) {
+    const input = document.getElementById(`pw-${i}`);
+    if (!input) continue;
+    const curr = parseInt(input.value) || 0;
+    const span = document.getElementById(`pinc-${i}`);
+    if (!span) continue;
+    if (input.value !== "") { span.textContent = `+${curr - prev}g`; prev = curr; } else span.textContent = '';
+  }
+}
+
+/* ---------- 추출 방식에 따른 UI 분기 ---------- */
+function onMethodChange() {
+  const m = V('fmethod');
+  const isEss = (m === '에센스 + 가수');
+  document.getElementById('bypass-sec').style.display = isEss ? '' : 'none';
+  document.getElementById('whead').textContent = isEss ? '서버 누적(g)' : '누적 물량(g)';
+  calcBypass();
+}
+
+function calcBypass() {
+  const el = document.getElementById('bpcalc'); if (!el) return;
+  const e = +V('fext') || 0, b = +V('fbp') || 0, dose = +V('fd') || 0;
+  if (!e) { el.textContent = ''; return; }
+  const total = e + b;
+  let s = `최종 ${total}g`;
+  if (dose) {
+    s += ` · 전체 1:${(total / dose).toFixed(1)}`;
+    s += ` (추출 ${(e / dose).toFixed(1)}배수 + 가수 ${(b / dose).toFixed(1)}배수)`;
+    if (total) s += ` · 가수 비중 ${Math.round(b / total * 100)}%`;
+  }
+  el.textContent = s;
+}
+
+/* ---------- 홀딩 시간 ---------- */
+function calcHold() {
+  const el = document.getElementById('holdcalc'); if (!el) return;
+  const b = V('fbrewtime'), d = V('fdrinktime');
+  if (!b || !d) { el.textContent = ''; return; }
+  const bm = +b.split(':')[0] * 60 + +b.split(':')[1];
+  const dm = +d.split(':')[0] * 60 + +d.split(':')[1];
+  let mins = dm - bm;
+  const nextDay = mins < 0;
+  if (nextDay) mins += 1440;
+  el.textContent = `홀딩 ${Math.floor(mins / 60)}시간 ${mins % 60}분${nextDay ? ' (익일 음용)' : ''}`;
+  return mins;
+}
+
+function holdMinutes() {
+  const b = V('fbrewtime'), d = V('fdrinktime');
+  if (!b || !d) return '';
+  const bm = +b.split(':')[0] * 60 + +b.split(':')[1];
+  const dm = +d.split(':')[0] * 60 + +d.split(':')[1];
+  let mins = dm - bm; if (mins < 0) mins += 1440;
+  return mins;
+}
+
+/* ---------- 디게싱: 상온 / 냉동 분리 ---------- */
+function calcDays() {
+  const r = V('froast'), f = V('ffreeze'), c = V('frec');
+  const el = document.getElementById('ddays');
+  if (!r || !c) { el.textContent = ''; return; }
+  const DAY = 86400000;
+  const total = Math.round((new Date(c) - new Date(r)) / DAY);
+  if (total < 0) { el.textContent = ''; return; }
+  if (f) {
+    const amb = Math.round((new Date(f) - new Date(r)) / DAY);
+    const frz = Math.round((new Date(c) - new Date(f)) / DAY);
+    if (amb >= 0 && frz >= 0) {
+      el.textContent = `총 ${total}일 = 상온 ${amb}일 + 냉동 ${frz}일`;
+      return;
+    }
+  }
+  el.textContent = `로스팅 후 ${total}일째`;
+}
+
+/* ---------- 평가: 실측 / 예측 ---------- */
+function setScore(k, v) {
+  if (mode === 'pred') { pd[k] = v; hasPred = true; } else { sc[k] = v; }
+  document.getElementById('sv-' + k).innerText = v;
+  upChart();
+}
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('m-act').className = 'mb' + (m === 'act' ? ' on' : '');
+  document.getElementById('m-pred').className = 'mb' + (m === 'pred' ? ' on' : '');
+  const cur = (m === 'pred') ? pd : sc;
+  dims.forEach(d => {
+    const s = document.getElementById(`sl-${d.k}`); if (s) s.value = cur[d.k];
+    const t = document.getElementById(`sv-${d.k}`); if (t) t.innerText = cur[d.k];
+  });
+  upChart();
+}
+
+function initChart() {
+  const ctx = document.getElementById('rc');
+  if (!ctx) return;
+  chart = new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: dims.map(d => d.l),
+      datasets: [
+        { label: '실측', data: dims.map(d => sc[d.k]), borderColor: '#6b8cba', backgroundColor: 'rgba(107,140,186,.15)', borderWidth: 1.5, pointRadius: 3 },
+        { label: '예측', data: dims.map(d => pd[d.k]), borderColor: '#a0956c', backgroundColor: 'rgba(160,149,108,.06)', borderWidth: 1.2, borderDash: [4,3], pointRadius: 2, hidden: true }
+      ]
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 5, ticks: { display: false }, grid: { color: 'rgba(0,0,0,.07)' } } } }
+  });
+}
+
+function upChart() {
+  if (!chart) return;
+  chart.data.datasets[0].data = dims.map(d => sc[d.k]);
+  chart.data.datasets[1].data = dims.map(d => pd[d.k]);
+  chart.data.datasets[1].hidden = !(hasPred || mode === 'pred');
+  chart.update('none');
+}
+
+/* ---------- 동기화 ---------- */
+function setSync(msg, bad) {
+  const el = document.getElementById('syncmsg');
+  if (el) { el.textContent = msg; el.style.color = bad ? '#b5654a' : '#a0956c'; }
+}
+
+async function syncNow(isInitial = false) {
+  const url = document.getElementById('api-url').value;
+  if(!url) { setSync('Sync URL이 비어 있습니다. 기록은 이 기기에만 저장됩니다.', true); return; }
+  document.getElementById('loading').style.display = 'flex';
+  try {
+    const res = await fetch(url);
+    const cloudData = await res.json();
+    let localIds = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+
+    // 데이터 병합 (삭제 방지)
+    const mergedIds = [...new Set([...(cloudData.ids || []), ...localIds])];
+    localStorage.setItem('bl_ids', JSON.stringify(mergedIds));
+
+    if(cloudData.items) {
+      for(const key in cloudData.items) { localStorage.setItem(key, cloudData.items[key]); }
+    }
+
+    // 만약 클라우드가 비어있다면 로컬 데이터를 밀어올림
+    if (isInitial && localIds.length > 0 && (!cloudData.ids || cloudData.ids.length === 0)) {
+      await uploadToCloud();
+    }
+
+    updateHistoryCount();
+    setSync(`동기화 완료 · ${new Date().toLocaleTimeString('ko-KR')} · 총 ${mergedIds.length}건`, false);
+    if(document.getElementById('p-hist').style.display !== 'none') renderHist();
+  } catch(e) {
+    console.error('동기화 중 오류:', e);
+    setSync('클라우드 연결 실패 — 기록은 이 기기에만 저장됩니다. 백업 내보내기를 권장합니다.', true);
+  }
+  document.getElementById('loading').style.display = 'none';
+}
+
+/* ---------- 로컬 백업 (클라우드 연결 실패 대비) ---------- */
+function exportData() {
+  const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  const items = {};
+  ids.forEach(id => { const it = localStorage.getItem('bl_'+id); if(it) items['bl_'+id] = it; });
+  const blob = new Blob([JSON.stringify({ ids, items, exported: new Date().toISOString() }, null, 2)],
+                        { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `브루잉로그_백업_${new Date().toISOString().slice(0,10)}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  document.getElementById('impmsg').textContent = `${ids.length}건 내보냄`;
+}
+
+function importData(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const msg = document.getElementById('impmsg');
+    try {
+      const data = JSON.parse(reader.result);
+      if (!data.ids || !data.items) throw new Error('형식이 맞지 않습니다');
+      const localIds = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+      let added = 0;
+      // 기존 로컬 기록은 절대 덮어쓰지 않음 — 없는 것만 채움
+      data.ids.forEach(id => {
+        if (!localStorage.getItem('bl_'+id) && data.items['bl_'+id]) {
+          localStorage.setItem('bl_'+id, data.items['bl_'+id]);
+          added++;
+        }
+      });
+      const merged = [...new Set([...data.ids, ...localIds])].sort((a,b) => b - a);
+      localStorage.setItem('bl_ids', JSON.stringify(merged));
+      updateHistoryCount(); renderHist();
+      msg.textContent = `${added}건 추가 · 총 ${merged.length}건 (기존 기록 유지)`;
+    } catch (e) {
+      msg.textContent = '불러오기 실패: ' + e.message;
+    }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
+
+async function uploadToCloud() {
+  const url = document.getElementById('api-url').value;
+  if(!url) return;
+  const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  const items = {};
+  ids.forEach(id => { const item = localStorage.getItem('bl_'+id); if(item) items['bl_'+id] = item; });
+  try { await fetch(url, { method: 'POST', body: JSON.stringify({ids, items}) }); } catch(e) {}
+}
+
+/* ---------- 저장 ---------- */
+async function save() {
+  const pourData = [];
+  for (let i = 0; i < nStage; i++) {
+    pourData.push({ s: stageName(i), t: V(`pt-${i}`), w: V(`pw-${i}`) });
+  }
+  const existingId = document.getElementById('f-id').value;
+  const id = existingId || Date.now().toString();
+  const rec = {
+    id,
+    recdate: V('frec'),
+    roastdate: V('froast'),
+    bean: V('fb') || '미입력',
+    dose: V('fd'),
+    grind: V('fgr'),
+    dripper: V('fdr'),
+    temp: V('ft'),
+    pour: pourData,
+    scores: { ...sc },
+    result: V('fr'), // 메모 복구
+    next: V('fn'),   // 메모 복구
+
+    /* --- 신규 필드 --- */
+    method: V('fmethod'),        // 추출 방식
+    tag: V('ftag'),              // 세션 태그 (A/B 등)
+    beanstate: V('fbeanstate'),  // 분쇄 시 원두 상태
+    freezedate: V('ffreeze'),    // 소분 냉동일
+    water: V('fwater'),          // 추출수
+    bpwater: V('fbpwater'),      // 가수수
+    ext: V('fext'),              // 추출량(에센스)
+    bp: V('fbp'),                // 가수량
+    bptemp: V('fbptemp'),        // 가수 온도
+    hold: V('fhold'),            // 홀딩 포맷
+    brewtime: V('fbrewtime'),    // 추출 시각
+    drinktime: V('fdrinktime'),  // 음용 시각
+    holdmin: holdMinutes(),      // 홀딩 시간(분, 자동)
+    drinktemp: V('fdrinktemp'),  // 음용 온도
+    pred: hasPred ? { ...pd } : null // 사전 예측 점수
+  };
+
+  let ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  if (!existingId) { ids.unshift(id); localStorage.setItem('bl_ids', JSON.stringify(ids)); }
+  localStorage.setItem('bl_' + id, JSON.stringify(rec));
+
+  await uploadToCloud();
+  alert('저장 및 동기화 완료');
+  resetForm(); updateHistoryCount(); go('hist');
+}
+
+/* ---------- 보관함 ---------- */
+function renderHist() {
+  const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  const hl = document.getElementById('hl'); if(!hl) return;
+  const q = (V('hsearch') || '').trim().toLowerCase();
+  hl.innerHTML = '';
+  if (!ids.length) { hl.innerHTML = '<div class="empty">저장된 기록이 없어요</div>'; return; }
+
+  let shown = 0;
+  ids.forEach(id => {
+    const r = JSON.parse(localStorage.getItem('bl_' + id)); if (!r) return;
+
+    if (q) {
+      const hay = [r.bean, r.tag, r.method, r.dripper, r.result, r.next].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return;
+    }
+    shown++;
+
+    const el = document.createElement('div'); el.className = 'hc'; el.onclick = () => viewDetail(r.id);
+
+    const meta = [
+      r.method || '',
+      r.grind ? r.grind + '클릭' : '',
+      r.temp ? r.temp + '°C' : '',
+      r.dripper || ''
+    ].filter(Boolean).join(' · ');
+
+    const holdBits = [];
+    if (r.hold) holdBits.push(r.hold);
+    if (r.holdmin !== '' && r.holdmin != null) holdBits.push(`${(r.holdmin/60).toFixed(1)}h`);
+    if (r.drinktemp) holdBits.push(`음용 ${r.drinktemp}°C`);
+    const holdLine = holdBits.length ? `<div class="hc-meta">${holdBits.join(' · ')}</div>` : '';
+
+    const tagLine = r.tag ? `<span class="badge">${r.tag}</span>` : '';
+    const sb = dims.map(d => `<span class="badge">${d.l} ${r.scores?.[d.k] || 3}</span>`).join('');
+
+    el.innerHTML = `
+      <div class="hc-top"><span class="hc-name">${r.bean} · ${r.dose||''}g</span><span class="hc-recdate">${r.recdate}</span></div>
+      <div class="hc-meta">${meta}</div>
+      ${holdLine}
+      <div class="hc-scores">${tagLine}${sb}</div>
+      ${r.result ? `<div class="hc-note">${r.result.substring(0, 60)}${r.result.length > 60 ? '...' : ''}</div>` : ''}
+    `;
+    hl.appendChild(el);
+  });
+
+  if (q && !shown) hl.innerHTML = '<div class="calc">검색 결과가 없습니다</div>';
+}
+
+/* ---------- 불러오기 ---------- */
+function viewDetail(id) {
+  const r = JSON.parse(localStorage.getItem('bl_' + id)); if (!r) return;
+  document.getElementById('f-id').value = r.id;
+  setV('fb', r.bean === '미입력' ? '' : r.bean);
+  setV('fd', r.dose); setV('fgr', r.grind); setV('fdr', r.dripper); setV('ft', r.temp);
+  setV('froast', r.roastdate); setV('frec', r.recdate);
+  setV('fr', r.result); setV('fn', r.next); // 메모 데이터 매핑
+
+  // 신규 필드 (구 기록에는 없으므로 빈 값으로 안전 처리)
+  setV('fmethod', r.method); setV('ftag', r.tag); setV('fbeanstate', r.beanstate);
+  setV('ffreeze', r.freezedate); setV('fwater', r.water); setV('fbpwater', r.bpwater);
+  setV('fext', r.ext); setV('fbp', r.bp); setV('fbptemp', r.bptemp);
+  setV('fhold', r.hold); setV('fbrewtime', r.brewtime); setV('fdrinktime', r.drinktime);
+  setV('fdrinktemp', r.drinktemp);
+
+  nStage = (r.pour && r.pour.length) ? r.pour.length : 4;
+  renderStages(false);
+  if (r.pour) {
+    r.pour.forEach((p, i) => {
+      setV(`pt-${i}`, p.t);
+      setV(`pw-${i}`, p.w);
+    });
+  }
+
+  sc = r.scores ? { ...sc, ...r.scores } : Object.fromEntries(dims.map(d => [d.k, 3]));
+  hasPred = !!r.pred;
+  pd = r.pred ? { ...pd, ...r.pred } : Object.fromEntries(dims.map(d => [d.k, 3]));
+  mode = 'act';
+  setMode('act');
+
+  updateInc(); onMethodChange(); calcHold(); calcDays(); upChart();
+  document.getElementById('editing-indicator').style.display = 'block';
+  go('new'); window.scrollTo(0, 0);
+}
+
+/* ---------- 초기화 ---------- */
+function resetForm() {
+  document.getElementById('f-id').value = '';
+  TEXTF.forEach(id => setV(id, ''));
+  document.getElementById('frec').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('editing-indicator').style.display = 'none';
+
+  nStage = 4;
+  renderStages(false);
+
+  sc = Object.fromEntries(dims.map(d => [d.k, 3]));
+  pd = Object.fromEntries(dims.map(d => [d.k, 3]));
+  hasPred = false;
+  setMode('act');
+  onMethodChange(); calcHold(); calcDays(); calcBypass(); upChart();
+}
+
+function go(tab) {
+  document.getElementById('p-new').style.display = tab === 'new' ? '' : 'none';
+  document.getElementById('p-hist').style.display = tab === 'hist' ? '' : 'none';
+  document.getElementById('t-new').className = 'tab' + (tab === 'new' ? ' on' : '');
+  document.getElementById('t-hist').className = 'tab' + (tab === 'hist' ? ' on' : '');
+  if (tab === 'hist') renderHist();
+}
+
+function saveUrl() {
+  const u = document.getElementById('api-url').value.trim();
+  // 빈 값을 저장하면 다음 실행 때 동기화가 영구히 끊기므로, 비면 저장 기록만 지움
+  if (u) localStorage.setItem('coffee_api_url', u);
+  else localStorage.removeItem('coffee_api_url');
+}
+function updateHistoryCount() { const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]'); const cnt = document.getElementById('cnt'); if(cnt) cnt.textContent = ids.length ? `(${ids.length})` : ''; }
+
+init();
+</script>
+</body>
+</html>
