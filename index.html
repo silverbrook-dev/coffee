@@ -248,7 +248,7 @@ textarea{resize:none;height:80px;line-height:1.5}
 </div>
 
 <script>
-const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbxeXhVfM9dHFIZC-CYRhDUwK8270adq2aB2x21cIxYv3tyUpWsCxL4So8paGfhF8FP1/exec";
+const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbyHzrgTsxLnD2HWbbkDLkwmxHxuvBnc_vj7QS4Y4znMZ5CrQlg43mG_MJuOxmIG1se8kg/exec";
 const dims = [{k:'aroma',l:'향'},{k:'acidity',l:'산미'},{k:'sweetness',l:'단맛'},{k:'bitterness',l:'쓴맛'},{k:'body',l:'바디감'},{k:'finish',l:'후미'}];
 
 // 텍스트 필드 일괄 처리용 목록 (신규 필드 포함)
@@ -265,6 +265,31 @@ let chart;
 
 const V = id => { const el = document.getElementById(id); return el ? el.value : ''; };
 const setV = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+
+  const SYNC_OK_MSG = n => `sync ok · ${new Date().toLocaleTimeString('ko-KR')} · total ${n}`;
+  const SYNC_FAIL_MSG = 'sync failed - local only. backup recommended.';
+
+  function rowToLocal(row) {
+      const rec = { ...row };
+      rec.id = String(row.id);
+      rec.scores = Object.fromEntries(dims.map(d => [d.k, row[d.k] !== '' && row[d.k] != null ? Number(row[d.k]) : 3]));
+      dims.forEach(d => delete rec[d.k]);
+      try { rec.pour = row.pour ? (typeof row.pour === 'string' ? JSON.parse(row.pour) : row.pour) : []; } catch(e) { rec.pour = []; }
+      rec.holdmin = (row.holdmin === '' || row.holdmin == null) ? '' : Number(row.holdmin);
+      rec.pred = null;
+      return rec;
+  }
+
+  function localToRow(rec) {
+      const row = { ...rec };
+      const scores = rec.scores || {};
+      dims.forEach(d => { row[d.k] = (scores[d.k] != null) ? scores[d.k] : ''; });
+      delete row.scores;
+      row.pour = JSON.stringify(rec.pour || []);
+      row.pred = rec.pred ? JSON.stringify(rec.pred) : '';
+      return row;
+  }
+  
 
 // [복구 로직] bl_ids 목록에서 빠진 로컬 기록 강제 검색
 function recoverOrphanedData() {
@@ -452,35 +477,33 @@ function setSync(msg, bad) {
 }
 
 async function syncNow(isInitial = false) {
-  const url = document.getElementById('api-url').value;
-  if(!url) { setSync('Sync URL이 비어 있습니다. 기록은 이 기기에만 저장됩니다.', true); return; }
-  document.getElementById('loading').style.display = 'flex';
-  try {
-    const res = await fetch(url);
-    const cloudData = await res.json();
-    let localIds = JSON.parse(localStorage.getItem('bl_ids') || '[]');
-
-    // 데이터 병합 (삭제 방지)
-    const mergedIds = [...new Set([...(cloudData.ids || []), ...localIds])];
-    localStorage.setItem('bl_ids', JSON.stringify(mergedIds));
-
-    if(cloudData.items) {
-      for(const key in cloudData.items) { localStorage.setItem(key, cloudData.items[key]); }
+    const url = document.getElementById('api-url').value;
+    if (!url) { setSync('Sync URL empty. Local only.', true); return; }
+    document.getElementById('loading').style.display = 'flex';
+    try {
+          const res = await fetch(url);
+          const cloudData = await res.json();
+          if (!cloudData.ok) throw new Error(cloudData.error || 'sheet read failed');
+          const rows = cloudData.rows || [];
+          let localIds = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+          const cloudIds = rows.map(r => String(r.id));
+          rows.forEach(row => {
+                  const rec = rowToLocal(row);
+                  localStorage.setItem('bl_' + rec.id, JSON.stringify(rec));
+          });
+          const mergedIds = [...new Set([...cloudIds, ...localIds])];
+          localStorage.setItem('bl_ids', JSON.stringify(mergedIds));
+          const localOnly = localIds.filter(id => !cloudIds.includes(String(id)));
+          if (localOnly.length) await uploadToCloud(localOnly);
+          updateHistoryCount();
+          setSync(SYNC_OK_MSG(mergedIds.length), false);
+          if (document.getElementById('p-hist').style.display !== 'none') renderHist();
+    } catch (e) {
+          console.error('sync error:', e);
+          setSync(SYNC_FAIL_MSG, true);
     }
-
-    // 만약 클라우드가 비어있다면 로컬 데이터를 밀어올림
-    if (isInitial && localIds.length > 0 && (!cloudData.ids || cloudData.ids.length === 0)) {
-      await uploadToCloud();
-    }
-
-    updateHistoryCount();
-    setSync(`동기화 완료 · ${new Date().toLocaleTimeString('ko-KR')} · 총 ${mergedIds.length}건`, false);
-    if(document.getElementById('p-hist').style.display !== 'none') renderHist();
-  } catch(e) {
-    console.error('동기화 중 오류:', e);
-    setSync('클라우드 연결 실패 — 기록은 이 기기에만 저장됩니다. 백업 내보내기를 권장합니다.', true);
-  }
-  document.getElementById('loading').style.display = 'none';
+    document.getElementById('loading').style.display = 'none';
+  
 }
 
 /* ---------- 로컬 백업 (클라우드 연결 실패 대비) ---------- */
@@ -528,13 +551,19 @@ function importData(input) {
   reader.readAsText(file);
 }
 
-async function uploadToCloud() {
-  const url = document.getElementById('api-url').value;
-  if(!url) return;
-  const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
-  const items = {};
-  ids.forEach(id => { const item = localStorage.getItem('bl_'+id); if(item) items['bl_'+id] = item; });
-  try { await fetch(url, { method: 'POST', body: JSON.stringify({ids, items}) }); } catch(e) {}
+async function uploadToCloud(onlyIds) {
+    const url = document.getElementById('api-url').value;
+    if (!url) return;
+    const ids = onlyIds || JSON.parse(localStorage.getItem('bl_ids') || '[]');
+    const records = [];
+    ids.forEach(id => {
+          const item = localStorage.getItem('bl_' + id);
+          if (item) records.push(localToRow(JSON.parse(item)));
+    });
+    if (!records.length) return;
+    try {
+          await fetch(url, { method: 'POST', body: JSON.stringify({ records }) });
+    } catch (e) { console.error('upload error:', e); }
 }
 
 /* ---------- 저장 ---------- */
@@ -584,7 +613,7 @@ async function save() {
   if (!existingId) { ids.unshift(id); localStorage.setItem('bl_ids', JSON.stringify(ids)); }
   localStorage.setItem('bl_' + id, JSON.stringify(rec));
 
-  await uploadToCloud();
+  await uploadToCloud([id]);
   alert('저장 및 동기화 완료');
   resetForm(); updateHistoryCount(); go('hist');
 }
