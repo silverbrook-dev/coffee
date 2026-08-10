@@ -272,7 +272,7 @@ const setV = (id, v) => { const el = document.getElementById(id); if (el) el.val
   function rowToLocal(row) {
       const rec = { ...row };
       rec.id = String(row.id);
-      rec.scores = Object.fromEntries(dims.map(d => [d.k, row[d.k] !== '' && row[d.k] != null ? Number(row[d.k]) : 3]));
+      const srcScores = row.scores || row; rec.scores = Object.fromEntries(dims.map(d => [d.k, srcScores[d.k] !== '' && srcScores[d.k] != null ? Number(srcScores[d.k]) : 3]));
       dims.forEach(d => delete rec[d.k]);
       try { rec.pour = row.pour ? (typeof row.pour === 'string' ? JSON.parse(row.pour) : row.pour) : []; } catch(e) { rec.pour = []; }
       rec.holdmin = (row.holdmin === '' || row.holdmin == null) ? '' : Number(row.holdmin);
@@ -282,9 +282,7 @@ const setV = (id, v) => { const el = document.getElementById(id); if (el) el.val
 
   function localToRow(rec) {
       const row = { ...rec };
-      const scores = rec.scores || {};
-      dims.forEach(d => { row[d.k] = (scores[d.k] != null) ? scores[d.k] : ''; });
-      delete row.scores;
+      row.scores = rec.scores || {};
       row.pour = JSON.stringify(rec.pour || []);
       row.pred = rec.pred ? JSON.stringify(rec.pred) : '';
       return row;
