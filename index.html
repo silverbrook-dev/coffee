@@ -156,6 +156,46 @@ textarea{resize:none;height:80px;line-height:1.5}
     <div class="divider"></div>
 
     <div class="sec">
+      <div class="slabel-row">
+        <div class="slabel">세션 설계</div>
+        <div style="display:flex;gap:6px">
+          <button class="mb" onclick="genSessionId()" title="오늘 날짜로 세션ID 생성">오늘 ID</button>
+          <button class="mb" onclick="cloneArm()" title="레시피는 그대로 두고 다음 비교군 준비">다음 비교군 복제</button>
+        </div>
+      </div>
+      <div class="brew-grid">
+        <div class="fg"><label>세션ID</label><input type="text" id="fsid" placeholder="예: S20260910" oninput="onSessionTypeChange()"></div>
+        <div class="fg"><label>세션 유형</label>
+          <select id="fstype" onchange="onSessionTypeChange()">
+            <option value="">선택</option>
+            <option>단일</option>
+            <option>원두비교</option>
+            <option>레시피비교</option>
+          </select>
+        </div>
+        <div class="fg"><label>비교군</label>
+          <select id="farm"><option value="">선택</option><option>A</option><option>B</option><option>C</option></select>
+        </div>
+        <div class="fg"><label>대조 변수</label>
+          <select id="fctrl">
+            <option value="">선택</option>
+            <option>원두</option><option>분쇄도</option><option>수온</option>
+            <option>분배비</option><option>가수량</option><option>필터</option><option>드리퍼</option>
+          </select>
+        </div>
+        <div class="fg"><label>시음 순서</label><input type="number" id="forder" min="1" max="6" placeholder="실제 마신 순서"></div>
+        <div class="fg"><label>필터</label>
+          <select id="ffilter">
+            <option value="">선택</option>
+            <option>V60 01</option><option>V60 02</option>
+            <option>웨이브 155</option><option>칼리타 101</option><option>칼리타 102</option>
+          </select>
+        </div>
+      </div>
+      <div class="calc" id="sesscalc"></div>
+    </div>
+
+    <div class="sec">
       <div class="slabel">물</div>
       <div class="brew-grid">
         <div class="fg"><label>추출수</label><input type="text" id="fwater" placeholder="예: 아이시스 2.0"></div>
@@ -231,6 +271,8 @@ textarea{resize:none;height:80px;line-height:1.5}
       <div class="slabel">메모</div>
       <div class="ng">
         <div class="fg"><label>결과</label><textarea id="fr" placeholder="맛, 향 특징…"></textarea></div>
+        <div class="fg"><label>상대평가 (비교 세션)</label><input type="text" id="frel" placeholder="예: 산미 B&gt;A, 단맛 A&gt;B, 바디 A≈B"></div>
+        <div class="fg"><label>세션 총평 (같은 세션에 동일하게)</label><textarea id="fsnote" placeholder="세션 전체 소감…"></textarea></div>
         <div class="fg"><label>다음 조정</label><textarea id="fn" placeholder="예: 분쇄도 ↑2클릭…"></textarea></div>
       </div>
     </div>
@@ -249,12 +291,27 @@ textarea{resize:none;height:80px;line-height:1.5}
 
 <script>
 const DEFAULT_URL = "https://script.google.com/macros/s/AKfycbyHzrgTsxLnD2HWbbkDLkwmxHxuvBnc_vj7QS4Y4znMZ5CrQlg43mG_MJuOxmIG1se8kg/exec";
-const dims = [{k:'aroma',l:'향'},{k:'acidity',l:'산미'},{k:'sweetness',l:'단맛'},{k:'bitterness',l:'쓴맛'},{k:'body',l:'바디감'},{k:'finish',l:'후미'}];
+const dims = [{k:'aroma',l:'향'},{k:'acidity',l:'산미'},{k:'sweetness',l:'단맛'},{k:'bitterness',l:'쓴맛'},{k:'body',l:'바디감'},{k:'finish',l:'후미'},{k:'balance',l:'밸런스'}];
+
+// 소급 적용하지 않는 축 — 옛 기록에서는 3이 아니라 '없음'으로 둔다
+const NEW_DIMS = ['balance'];
+
+// 단일변수 검증에서 비교하는 필드 (라벨 → 레코드 키)
+const CTRL_MAP = {
+  '원두':'bean', '분쇄도':'grind', '수온':'temp', '분배비':'pour',
+  '가수량':'bp', '필터':'filter', '드리퍼':'dripper'
+};
+const CHECK_FIELDS = [
+  ['bean','원두'], ['dose','투입량'], ['grind','분쇄도'], ['dripper','드리퍼'],
+  ['temp','수온'], ['method','추출방식'], ['filter','필터'],
+  ['water','추출수'], ['bp','가수량'], ['bptemp','가수온도'], ['pour','분배비']
+];
 
 // 텍스트 필드 일괄 처리용 목록 (신규 필드 포함)
 const TEXTF = ['fb','fd','fgr','fdr','ft','fmethod','fbeanstate','ftag',
                'froast','ffreeze','fwater','fbpwater','fext','fbp','fbptemp','fdilutewater','fdilutetemp','fice',
-               'fhold','fbrewtime','fdrinktime','fdrinktemp','fr','fn'];
+               'fhold','fbrewtime','fdrinktime','fdrinktemp','fr','fn',
+               'fsid','fstype','farm','fctrl','forder','ffilter','frel','fsnote'];
 
 let sc = Object.fromEntries(dims.map(d => [d.k, 3]));   // 실측
 let pd = Object.fromEntries(dims.map(d => [d.k, 3]));   // 예측
@@ -272,7 +329,12 @@ const setV = (id, v) => { const el = document.getElementById(id); if (el) el.val
   function rowToLocal(row) {
       const rec = { ...row };
       rec.id = String(row.id);
-      const srcScores = row.scores || row; rec.scores = Object.fromEntries(dims.map(d => [d.k, srcScores[d.k] !== '' && srcScores[d.k] != null ? Number(srcScores[d.k]) : 3]));
+      const srcScores = row.scores || row;
+      rec.scores = Object.fromEntries(dims.map(d => {
+        const v = srcScores[d.k];
+        if (v === '' || v == null) return [d.k, NEW_DIMS.includes(d.k) ? null : 3];
+        return [d.k, Number(v)];
+      }));
       dims.forEach(d => delete rec[d.k]);
       try { rec.pour = row.pour ? (typeof row.pour === 'string' ? JSON.parse(row.pour) : row.pour) : []; } catch(e) { rec.pour = []; }
       rec.holdmin = (row.holdmin === '' || row.holdmin == null) ? '' : Number(row.holdmin);
@@ -319,6 +381,7 @@ function init() {
   });
 
   initChart();
+  onSessionTypeChange();
   updateHistoryCount();
   if (document.getElementById('api-url').value) syncNow(true);
 }
@@ -425,6 +488,103 @@ function calcDays() {
   el.textContent = `로스팅 후 ${total}일째`;
 }
 
+/* ---------- 세션 설계 ---------- */
+function genSessionId() {
+  const d = V('frec') || new Date().toISOString().slice(0, 10);
+  const base = 'S' + d.replace(/-/g, '');
+  const used = new Set();
+  JSON.parse(localStorage.getItem('bl_ids') || '[]').forEach(id => {
+    try {
+      const r = JSON.parse(localStorage.getItem('bl_' + id));
+      if (r && r.sessionid) used.add(r.sessionid);
+    } catch (e) {}
+  });
+  let sid = base, n = 1;
+  while (used.has(sid)) { n++; sid = base + '-' + n; }   // 같은 날 두 번째 세션
+  setV('fsid', sid);
+  if (!V('farm')) setV('farm', 'A');
+  if (!V('forder')) setV('forder', 1);
+  onSessionTypeChange();
+}
+
+/* 레시피·시각은 남기고 관능 평가만 비워 다음 비교군을 준비한다 */
+function cloneArm(silent = false) {
+  if (!V('fsid')) { alert('먼저 「오늘 ID」로 세션ID를 만들어 주세요.'); return; }
+
+  const cur = (V('farm') || 'A').toUpperCase();
+  const next = cur >= 'C' ? 'C' : String.fromCharCode(cur.charCodeAt(0) + 1);
+
+  document.getElementById('f-id').value = '';   // 새 줄로 저장되게 비운다
+  setV('farm', next);
+  setV('forder', (+V('forder') || 1) + 1);
+
+  setV('fr', '');     // 결과 메모는 비교군마다 새로 씀
+  setV('frel', '');   // 상대평가도 마지막 비교군에서 한 번만
+  // 세션총평·다음조정은 세션 단위라 그대로 둔다
+
+  sc = Object.fromEntries(dims.map(d => [d.k, 3]));
+  pd = Object.fromEntries(dims.map(d => [d.k, 3]));
+  hasPred = false;
+  setMode('act');
+
+  document.getElementById('editing-indicator').style.display = 'none';
+  onSessionTypeChange(); upChart();
+  window.scrollTo(0, 0);
+  if (!silent) alert(`비교군 ${next} 준비 완료.\n\n바꿀 조건만 고치고 점수를 매기세요.`);
+}
+
+function onSessionTypeChange() {
+  const el = document.getElementById('sesscalc'); if (!el) return;
+  const t = V('fstype'), sid = V('fsid');
+  if (!t) { el.textContent = ''; return; }
+  if (t === '단일') { el.textContent = '단일 세션 — 비교군·대조변수는 비워도 됩니다.'; return; }
+  const peers = sessionPeers(sid, V('f-id'));
+  el.textContent = `${t} — 비교군마다 줄을 따로 만드세요. 같은 세션ID 기록 ${peers.length}건 확인됨.`;
+}
+
+// 같은 세션ID를 가진 다른 기록들
+function sessionPeers(sid, selfId) {
+  if (!sid) return [];
+  const ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
+  const out = [];
+  ids.forEach(id => {
+    if (String(id) === String(selfId)) return;
+    try {
+      const r = JSON.parse(localStorage.getItem('bl_' + id));
+      if (r && r.sessionid === sid) out.push(r);
+    } catch (e) {}
+  });
+  return out;
+}
+
+// 대조변수 외의 조건이 함께 바뀌었으면 경고 문구를 돌려준다
+function checkSingleVariable(rec) {
+  if (!rec.sessionid || !rec.sessiontype || rec.sessiontype === '단일') return '';
+  const peers = sessionPeers(rec.sessionid, rec.id);
+  if (!peers.length) return '';
+
+  const allowed = CTRL_MAP[rec.ctrlvar] || '';
+  const norm = v => {
+    if (v == null || v === '') return '';
+    return typeof v === 'object' ? JSON.stringify(v) : String(v).trim();
+  };
+
+  const diffs = [];
+  CHECK_FIELDS.forEach(([key, label]) => {
+    if (key === allowed) return;
+    const mine = norm(rec[key]);
+    peers.forEach(p => {
+      const theirs = norm(p[key]);
+      if (mine === '' || theirs === '') return;   // 미입력은 판정하지 않음
+      if (mine !== theirs && !diffs.includes(label)) diffs.push(label);
+    });
+  });
+
+  if (!diffs.length) return '';
+  const ctrl = rec.ctrlvar || '(미지정)';
+  return `⚠ 단일변수 위반 가능\n\n대조변수는 "${ctrl}"인데 다음도 함께 달라졌습니다:\n· ${diffs.join(', ')}\n\n이대로 저장하면 결론을 어느 변수 탓으로 돌릴 수 없습니다.`;
+}
+
 /* ---------- 평가: 실측 / 예측 ---------- */
 function setScore(k, v) {
   if (mode === 'pred') { pd[k] = v; hasPred = true; } else { sc[k] = v; }
@@ -438,8 +598,8 @@ function setMode(m) {
   document.getElementById('m-pred').className = 'mb' + (m === 'pred' ? ' on' : '');
   const cur = (m === 'pred') ? pd : sc;
   dims.forEach(d => {
-    const s = document.getElementById(`sl-${d.k}`); if (s) s.value = cur[d.k];
-    const t = document.getElementById(`sv-${d.k}`); if (t) t.innerText = cur[d.k];
+    const s = document.getElementById(`sl-${d.k}`); if (s) s.value = cur[d.k] == null ? 3 : cur[d.k];
+    const t = document.getElementById(`sv-${d.k}`); if (t) t.innerText = cur[d.k] == null ? '—' : cur[d.k];
   });
   upChart();
 }
@@ -604,16 +764,36 @@ async function save() {
     drinktime: V('fdrinktime'),  // 음용 시각
     holdmin: holdMinutes(),      // 홀딩 시간(분, 자동)
     drinktemp: V('fdrinktemp'),  // 음용 온도
-    pred: hasPred ? { ...pd } : null // 사전 예측 점수
+    pred: hasPred ? { ...pd } : null, // 사전 예측 점수
+
+    /* --- 세션 설계 필드 --- */
+    sessionid: V('fsid'),        // 세션ID
+    sessiontype: V('fstype'),    // 세션 유형
+    arm: V('farm'),              // 비교군
+    ctrlvar: V('fctrl'),         // 대조 변수
+    tasteorder: V('forder'),     // 시음 순서
+    filter: V('ffilter'),        // 필터
+    relnote: V('frel'),          // 상대평가
+    sessionnote: V('fsnote')     // 세션 총평
   };
+
+  const warn = checkSingleVariable(rec);
+  if (warn && !confirm(warn + '\n\n그래도 저장할까요?')) return;
 
   let ids = JSON.parse(localStorage.getItem('bl_ids') || '[]');
   if (!existingId) { ids.unshift(id); localStorage.setItem('bl_ids', JSON.stringify(ids)); }
   localStorage.setItem('bl_' + id, JSON.stringify(rec));
 
   await uploadToCloud([id]);
+  updateHistoryCount();
+
+  const isCmp = rec.sessiontype === '원두비교' || rec.sessiontype === '레시피비교';
+  if (isCmp && confirm(`비교군 ${rec.arm || ''} 저장 완료.\n\n이어서 다음 비교군을 기록할까요?`)) {
+    cloneArm(true);
+    return;
+  }
   alert('저장 및 동기화 완료');
-  resetForm(); updateHistoryCount(); go('hist');
+  resetForm(); go('hist');
 }
 
 /* ---------- 보관함 ---------- */
@@ -629,7 +809,9 @@ function renderHist() {
     const r = JSON.parse(localStorage.getItem('bl_' + id)); if (!r) return;
 
     if (q) {
-      const hay = [r.bean, r.tag, r.method, r.dripper, r.result, r.next].filter(Boolean).join(' ').toLowerCase();
+      const hay = [r.bean, r.tag, r.method, r.dripper, r.result, r.next,
+                   r.sessionid, r.sessiontype, r.arm, r.ctrlvar, r.filter, r.relnote, r.sessionnote
+                  ].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(q)) return;
     }
     shown++;
@@ -649,14 +831,20 @@ function renderHist() {
     if (r.drinktemp) holdBits.push(`음용 ${r.drinktemp}°C`);
     const holdLine = holdBits.length ? `<div class="hc-meta">${holdBits.join(' · ')}</div>` : '';
 
+    const armLine = r.arm ? `<span class="badge">${r.arm}${r.tasteorder ? '·' + r.tasteorder + '번째' : ''}</span>` : '';
+    const ctrlLine = r.ctrlvar ? `<span class="badge">대조 ${r.ctrlvar}</span>` : '';
     const tagLine = r.tag ? `<span class="badge">${r.tag}</span>` : '';
-    const sb = dims.map(d => `<span class="badge">${d.l} ${r.scores?.[d.k] || 3}</span>`).join('');
+    const sb = dims.map(d => {
+      const v = r.scores?.[d.k];
+      if (v == null || v === '') return '';
+      return `<span class="badge">${d.l} ${v}</span>`;
+    }).join('');
 
     el.innerHTML = `
       <div class="hc-top"><span class="hc-name">${r.bean} · ${r.dose||''}g</span><span class="hc-recdate">${r.recdate}</span></div>
       <div class="hc-meta">${meta}</div>
       ${holdLine}
-      <div class="hc-scores">${tagLine}${sb}</div>
+      <div class="hc-scores">${armLine}${ctrlLine}${tagLine}${sb}</div>
       ${r.result ? `<div class="hc-note">${r.result.substring(0, 60)}${r.result.length > 60 ? '...' : ''}</div>` : ''}
     `;
     hl.appendChild(el);
@@ -681,6 +869,11 @@ function viewDetail(id) {
   setV('fdilutewater', r.dilutewater); setV('fdilutetemp', r.dilutetemp); setV('fice', r.ice);
   setV('fhold', r.hold); setV('fbrewtime', r.brewtime); setV('fdrinktime', r.drinktime);
   setV('fdrinktemp', r.drinktemp);
+
+  setV('fsid', r.sessionid); setV('fstype', r.sessiontype); setV('farm', r.arm);
+  setV('fctrl', r.ctrlvar); setV('forder', r.tasteorder); setV('ffilter', r.filter);
+  setV('frel', r.relnote); setV('fsnote', r.sessionnote);
+  onSessionTypeChange();
 
   nStage = (r.pour && r.pour.length) ? r.pour.length : 4;
   renderStages(false);
@@ -716,7 +909,7 @@ function resetForm() {
   pd = Object.fromEntries(dims.map(d => [d.k, 3]));
   hasPred = false;
   setMode('act');
-  onMethodChange(); calcHold(); calcDays(); calcBypass(); upChart();
+  onMethodChange(); calcHold(); calcDays(); calcBypass(); onSessionTypeChange(); upChart();
 }
 
 function go(tab) {
